@@ -1,19 +1,97 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
-- main
+- main  # Adjust the branch trigger as needed
 
-pool:
-  vmImage: ubuntu-latest
+stages:
+  - stage: Test
+    displayName: "Test"
+    jobs:
+      - job: RunTests
+        displayName: "Run Python Tests"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.x"
+              addToPath: true
+          - script: |
+              pip install -r requirements.txt
+              pytest
+              pylint models/*.py
+            displayName: "Run Tests and Linting"
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+  - stage: Build
+    displayName: "Build Docker Image"
+    jobs:
+      - job: BuildDockerImage
+        displayName: "Build and Push Docker Image"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: DockerInstaller@0
+            displayName: "Install Docker"
+          - script: |
+              docker login -u $(DOCKER_USERNAME) -p $(DOCKER_PASSWORD)
+              docker build -t $(DOCKER_IMAGE) .
+              docker images
+              docker push $(DOCKER_IMAGE)
+            env:
+              DOCKER_USERNAME: $(DOCKER_USERNAME)
+              DOCKER_PASSWORD: $(DOCKER_PASSWORD)
+            displayName: "Build and Push Docker Image"
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+  - stage: DeployStaging
+    displayName: "Deploy to Staging"
+    jobs:
+      - job: DeployToStaging
+        displayName: "Deploy Docker Image to Heroku Staging"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: DockerInstaller@0
+            displayName: "Install Docker"
+          - script: |
+              docker login --username=_ --password=$(HEROKU_API_KEY) registry.heroku.com
+              docker pull $(DOCKER_IMAGE)
+              docker tag $(DOCKER_IMAGE) registry.heroku.com/$(HEROKU_APP_NAME_STAGING)/web
+              docker push registry.heroku.com/$(HEROKU_APP_NAME_STAGING)/web
+              heroku container:release web --app $(HEROKU_APP_NAME_STAGING)
+            env:
+              HEROKU_API_KEY: $(HEROKU_API_KEY)
+              HEROKU_APP_NAME_STAGING: $(HEROKU_APP_NAME_STAGING)
+            displayName: "Push and Release to Staging"
+
+  - stage: AutomatedTest
+    displayName: "Automated Tests on Staging"
+    jobs:
+      - job: TestStagingApp
+        displayName: "Run Automated Tests on Staging"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - script: |
+              curl -I https://$(HEROKU_APP_NAME_STAGING).herokuapp.com
+            env:
+              HEROKU_APP_NAME_STAGING: $(HEROKU_APP_NAME_STAGING)
+            displayName: "Check Staging App Health"
+
+  - stage: DeployProd
+    displayName: "Deploy to Production"
+    jobs:
+      - job: DeployToProd
+        displayName: "Deploy Docker Image to Heroku Production"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: DockerInstaller@0
+            displayName: "Install Docker"
+          - script: |
+              docker login --username=_ --password=$(HEROKU_API_KEY) registry.heroku.com
+              docker pull $(DOCKER_IMAGE)
+              docker tag $(DOCKER_IMAGE) registry.heroku.com/$(HEROKU_APP_NAME_PROD)/web
+              docker push registry.heroku.com/$(HEROKU_APP_NAME_PROD)/web
+              heroku container:release web --app $(HEROKU_APP_NAME_PROD)
+            env:
+              HEROKU_API_KEY: $(HEROKU_API_KEY)
+              HEROKU_APP_NAME_PROD: $(HEROKU_APP_NAME_PROD)
+            displayName: "Push and Release to Production"
